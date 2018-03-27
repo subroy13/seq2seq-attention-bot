@@ -10,3 +10,4 @@
   
   ** If you want to train it more, set first_time = False, it will load the poreviously saved encoder and decoder and start training from it.
   
+ -- You need to run bot_app.py after training to run the chatbot in an interactive mode.
