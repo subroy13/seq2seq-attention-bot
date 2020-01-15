@@ -1,6 +1,12 @@
 import _pickle as pickle
 from Chatbot_class import evaluate
 from preprocess import Lang
+import time
+import warnings
+
+warnings.filterwarnings('ignore')
+
+print('Current time: ', time.ctime())
 
 print('Loading encoder...')
 print('Please wait...')
@@ -8,12 +14,17 @@ with open('encoder','rb') as f:
     encoder = pickle.load(f)
     f.close()
 print('Encoder loaded')
+
+print('Current time: ', time.ctime())
+
 print('Loading decoder...')
 print('Please wait...')
 with open('decoder','rb') as f:
     decoder = pickle.load(f)
     f.close()
 print('Decoder loaded')
+
+print('Current time: ', time.ctime())
 
 print('Loading data...')
 with open('lang_dict','rb') as f:
@@ -22,6 +33,9 @@ with open('lang_dict','rb') as f:
     output_lang = lang_dict['output']
     f.close()
 print('Data loaded')
+
+print('Current time: ', time.ctime())
+
 print('Chatbot deployed')
 print()
 

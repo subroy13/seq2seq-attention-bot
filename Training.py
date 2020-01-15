@@ -11,6 +11,9 @@ import Chatbot_class
 from preprocess import Lang
 from preprocess import variableFromSentence
 
+import warnings
+warnings.filterwarnings("ignore")
+
 def asMinutes(s):
     m = math.floor(s / 60)
     s -= m * 60
@@ -32,7 +35,7 @@ def variablesFromPair(pair):
 
         
 
-def trainIters(n_iters, print_every = 1000, save_every = 1000, learning_rate = 0.01, first_time = True):
+def trainIters(print_every = 1000, save_every = 1000, learning_rate = 0.01, first_time = True):
 
     start = time.time()
     print_loss_total = 0 #reset every print_every
@@ -59,26 +62,27 @@ def trainIters(n_iters, print_every = 1000, save_every = 1000, learning_rate = 0
 
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    training_pairs = [variablesFromPair(random.choice(pairs)) for i in range(n_iters)]
     criterion = torch.nn.NLLLoss()
+    #training_pairs = random.sample(pairs, sample_size)
+    random.shuffle(pairs)
 
-    for iteration in range(1, n_iters +1):
-        training_pair = training_pairs[iteration -1]
-        input_variable = training_pair[0]
-        target_variable = training_pair[1]
+    for iteration, pair in enumerate(pairs):
+        pair = variablesFromPair(pair)
+        input_variable = pair[0]
+        target_variable = pair[1]
 
         loss = Chatbot_class.train(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion) 
         
         print_loss_total += loss
 
-        if iteration % print_every == 0:   
+        if (iteration+1) % print_every == 0:   
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, iteration / n_iters), iteration, iteration / n_iters * 100, print_loss_avg))
+            print('%s (%d %d%%) %.4f' % (timeSince(start, iteration / n_pairs), iteration, iteration / n_pairs * 100, print_loss_avg))
             answer = Chatbot_class.evaluate(encoder, decoder, "Who are you?", input_lang, output_lang)
             print(answer)
 
-        if iteration % save_every == 0:
+        if (iteration+1) % save_every == 0:
             with open('encoder','wb') as f:
                 pickle.dump(encoder, f)
                 f.close()
@@ -98,13 +102,15 @@ if __name__ == '__main__':
         f.close()
     print('data loaded')
 
-    hidden_size = 256
+    hidden_size = 512
     dropout_p = 0.1
     max_seq_length = 10
     use_cuda = torch.cuda.is_available()
+    print('Size of pairs', len(pairs))
+    n_pairs = len(pairs)
     print('Running trainiters')
 
-    trainIters(1000, print_every = 500, save_every = 5000, first_time = False)
+    trainIters(print_every = 1000, save_every = 10000, first_time = True)
 
 
 
