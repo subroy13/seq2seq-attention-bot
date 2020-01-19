@@ -1,129 +1,117 @@
-import random
-import torch
-from torch.autograd import Variable
-from torch import optim
-import pickle
-
-import time
-import math
-
+# Making the necessary imports
+import tensorflow as tf
 import Chatbot_class
-from preprocess import Lang
-from preprocess import variableFromSentence
+import json
+import numpy as np
+from keras.preprocessing.text import tokenizer_from_json
 
-import warnings
-warnings.filterwarnings("ignore")
+# load the tokenziers
+with open('./processed_data/inp_lang.json', 'r') as f:
+    json_data = json.load(f)
+    inp_lang = tokenizer_from_json(json_data)
+    f.close()
 
-def asMinutes(s):
-    m = math.floor(s / 60)
-    s -= m * 60
-    return '%dm %ds' % (m, s)
+print('Input Language Loaded...')    
+
+with open('./processed_data/targ_lang.json', 'r') as f:
+    json_data = json.load(f)
+    targ_lang = tokenizer_from_json(json_data)
+    f.close()
+
+print('Target Language Loaded...')    
+
+# load the dataset
+npzfile = np.load('./processed_data/data.npz')    
 
 
-def timeSince(since, percent):
-    now = time.time()
-    s = now - since
-    es = s / (percent)
-    rs = es - s
-    return '%s (- %s)' % (asMinutes(s), asMinutes(rs))
+# define hyperparameters
+BUFFER_SIZE = len(npzfile['arr_0'])
+BATCH_SIZE = 64
+steps_per_epoch = len(npzfile['arr_0'])//BATCH_SIZE
+embedding_dim = 128
+units = 256
+vocab_inp_size = len(inp_lang.word_index)+1
+vocab_tar_size = len(targ_lang.word_index)+1
+max_sentence_length = 15
+
+# create tensorflow dataset pipeline for faster processing
+dataset = tf.data.Dataset.from_tensor_slices((npzfile['arr_0'], npzfile['arr_1'])).shuffle(BUFFER_SIZE)
+dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+print('Loaded dataset into memory...')
 
 
-def variablesFromPair(pair):
-    input_variable = variableFromSentence(input_lang, pair[0])
-    target_variable = variableFromSentence(output_lang, pair[1])
-    return (input_variable, target_variable)
+# create encoder from Chatbot class
+encoder = Chatbot_class.create_encoder(vocab_inp_size, embedding_dim, units, max_sentence_length)
+encoder.summary()
 
-        
+# create decoder from Chatbot class
+decoder = Chatbot_class.create_decoder(vocab_tar_size, embedding_dim, units, units, max_sentence_length)
+decoder.summary()
 
-def trainIters(print_every = 1000, save_every = 1000, learning_rate = 0.01, first_time = True):
 
-    start = time.time()
-    print_loss_total = 0 #reset every print_every
+# there are lots of parameters, so more training would yield better results
 
-    if first_time:
-        encoder = Chatbot_class.EncoderRNN(input_lang.n_words, hidden_size)
-        decoder = Chatbot_class.AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p = 0.1)
-        if use_cuda:
-            encoder = encoder.cuda()
-            decoder = decoder.cuda()
+optimizer = tf.keras.optimizers.Adam(1e-2)
+
+# the training step function that performs the optimization
+@tf.function
+def train_step(inp, targ):
+    loss = 0
+
+    with tf.GradientTape() as tape:
+        enc_output, enc_hidden = encoder(inp)  # pass the input to the encoder, get encoder_output and state
+        dec_hidden = enc_hidden   # set the decoder hidden state same as encoder final state
+        dec_input = tf.expand_dims([targ_lang.word_index['<start>']] * BATCH_SIZE, 1)
+
+        # Teacher forcing - feeding the target as the next input
+        for t in range(1, targ.shape[1]):
+            # passing enc_output to the decoder
+            predictions, dec_hidden = decoder([enc_output, dec_hidden, dec_input])
+
+            loss += Chatbot_class.loss_func(targ[:, t], predictions)
+
+            # using teacher forcing
+            dec_input = tf.expand_dims(targ[:, t], 1)
+
+    batch_loss = (loss / int(targ.shape[1]))
+    variables = encoder.trainable_variables + decoder.trainable_variables
+    gradients = tape.gradient(loss, variables)
+    optimizer.apply_gradients(zip(gradients, variables))
+    return batch_loss
+
+
+
+## Here you have the training step
+def training(EPOCHS, First_time = False):
+    show_output = int(steps_per_epoch/100)
     
-    else:
-        print('loading Encoder...')
-        with open('encoder','rb') as f:
-            encoder = pickle.load(f)
-            f.close()
-        print('Encoder loaded')
-        print('loading Decoder...')
-        with open('decoder','rb') as f:
-            decoder = pickle.load(f)
-            f.close()
-        print('Decoder loaded')
+    if not First_time:
+        encoder.load_weights('./trained_model/encoder_weights.h5')
+        decoder.load_weights('./trained_model/decoder_weights.h5')
     
+    for epoch in range(EPOCHS):
+        print('=' * 50)
+        print('EPOCH: ', epoch+1)
+        total_loss = 0
 
-    encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
-    decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    criterion = torch.nn.NLLLoss()
-    #training_pairs = random.sample(pairs, sample_size)
-    random.shuffle(pairs)
+        for (batch, (inp, targ)) in enumerate(dataset.take(steps_per_epoch)):
+            batch_loss = train_step(inp, targ)
+            total_loss += batch_loss
 
-    for iteration, pair in enumerate(pairs):
-        pair = variablesFromPair(pair)
-        input_variable = pair[0]
-        target_variable = pair[1]
+            if batch % show_output == 0:
+                print(str(batch/show_output) + '%\t\t Loss: ' + str(batch_loss))
 
-        loss = Chatbot_class.train(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion) 
-        
-        print_loss_total += loss
+        print('Epoch {} Loss {:.4f}'.format(epoch + 1, total_loss / steps_per_epoch))
+      
+    # after training save the weights
+    encoder.save_weights('./trained_model/encoder_weights.h5')
+    decoder.save_weights('./trained_model/decoder_weights.h5')
 
-        if (iteration+1) % print_every == 0:   
-            print_loss_avg = print_loss_total / print_every
-            print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, iteration / n_pairs), iteration, iteration / n_pairs * 100, print_loss_avg))
-            answer = Chatbot_class.evaluate(encoder, decoder, "Who are you?", input_lang, output_lang)
-            print(answer)
-
-        if (iteration+1) % save_every == 0:
-            with open('encoder','wb') as f:
-                pickle.dump(encoder, f)
-                f.close()
-
-            with open('decoder','wb') as f:
-                pickle.dump(decoder, f)
-                f.close()
-
-
-
-if __name__ == '__main__':
-    with open('lang_dict','rb') as f:
-        lang_dict = pickle.load(f)
-        input_lang = lang_dict['input']
-        output_lang = lang_dict['output']
-        pairs = lang_dict['pairs']
-        f.close()
-    print('data loaded')
-
-    hidden_size = 512
-    dropout_p = 0.1
-    max_seq_length = 10
-    use_cuda = torch.cuda.is_available()
-    print('Size of pairs', len(pairs))
-    n_pairs = len(pairs)
-    print('Running trainiters')
-
-    trainIters(print_every = 1000, save_every = 10000, first_time = True)
+    
+# when performing training for first time, use First_time = True, else First_time = False
+training(1, First_time = False) 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+    
