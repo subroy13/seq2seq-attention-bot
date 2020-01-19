@@ -1,52 +1,25 @@
+# Making the necessary imports
+import tensorflow as tf
 import re
-import torch
-from torch.autograd import Variable
-import pickle
-
-max_sentence_length = 10
-use_cuda = torch.cuda.is_available()
-EOS_token = 1
-SOS_token = 0
-
-class Lang:
-
-    def __init__(self, name):
-        self.name = name
-        self.word2index = {}   #vocabtoint dictionary
-        self.word2count = {}
-        self.index2word = {0: "SOS", 1: "EOS"}
-        self.n_words = 2  #count SOS and EOS already
-
-
-        
-
-    def addSentence(self, sentence):
-        #sentence = clean_text(sentence)
-        for word in sentence.split(' '):
-            self.addWord(word)
-
-    def addWord(self, word):
-        if word not in self.word2index:
-            #therefore word is not in dictionary
-            self.word2index[word] = self.n_words
-            self.word2count[word] = 1
-            self.index2word[self.n_words] = word
-            self.n_words += 1
-        else:
-            #the word is in vocabulary, so increase its count
-            self.word2count[word] += 1
+import numpy as np
+import json
 
 
 def clean_text(text):
-    #clean the text by removing unneccessary characters and abbreviations
-    text = text.lower()
+    """
+    A function that cleans the text by removing the common abbreviations and unwanted characters or puntuations
+    It also ends up adding a <start> tag at the beginning of the text and
+    and <end> tag at the last of the text
+    """
+    text = text.lower().strip()   # lowercase and remove trailing whitespaces
     text = re.sub(r"i'm", "i am", text)
     text = re.sub(r"he's", "he is", text)
     text = re.sub(r"she's", "she is", text)
     text = re.sub(r"it's", "it is", text)
     text = re.sub(r"that's", "that is", text)
-    text = re.sub(r"what's", "that is", text)
+    text = re.sub(r"what's", "what is", text)
     text = re.sub(r"where's", "where is", text)
+    text = re.sub(r"there's", "there is", text)
     text = re.sub(r"how's", "how is", text)
     text = re.sub(r"\'ll", " will", text)
     text = re.sub(r"\'ve", " have", text)
@@ -59,114 +32,106 @@ def clean_text(text):
     text = re.sub(r"n'", "ng", text)
     text = re.sub(r"'bout", "about", text)
     text = re.sub(r"'til", "until", text)
+    text = re.sub(r'[" "]+', " ", text)   # remove extra spaces in between
     text = re.sub(r"[-()\"#/@;:<>{}`+=~|.!?,]", "", text)
+    text = '<start> ' + text + ' <end>'
     return text
 
 
+def preprocess(dataset_folder_path, len_bound, num_examples = None):
+    """
+    It reads the required files, creates questions and answers based on the conversations.
+    """
+    min_sentence_length = len_bound[0]
+    max_sentence_length = len_bound[1]
+    
+    lines = open(str(dataset_folder_path) + '/movie_lines.txt',encoding='utf-8', errors = 'ignore').read().split('\n')
+    conv_lines = open(str(dataset_folder_path) + '/movie_conversations.txt', encoding='utf-8', errors='ignore').read().split('\n')
 
-def filterPair(p):
-    return len(p[0].split(' ')) < max_sentence_length and \
-        len(p[1].split(' ')) < max_sentence_length
 
-
-def filterPairs(pairs):
-    return [pair for pair in pairs if filterPair(pair)]
-
-
-def preprocess():
-    lines = open('movie_lines.txt',encoding='utf-8', errors = 'ignore').read().split('\n')
-    conv_lines = open('movie_conversations.txt', encoding='utf-8', errors='ignore').read().split('\n')
     # Create a dictionary to map each line's id with its text
     id2line = {}
+    sent_len = {}   # create a dictionary to contain sentence lengths
+    
     for line in lines:
         _line = line.split(' +++$+++ ')
         if len(_line) == 5:
-            id2line[_line[0]] = _line[4]
+            speech = clean_text(_line[4])
+            id2line[_line[0]] = speech
+            sent_len[_line[0]] = len(speech.split(' '))
+
+
     # Create a list of all of the conversations' lines' ids.
     convs = [ ]
     for line in conv_lines[:-1]:
         _line = line.split(' +++$+++ ')[-1][1:-1].replace("'","").replace(" ","")
         convs.append(_line.split(','))
+
     # Sort the sentences into questions (inputs) and answers (targets)
-    pairs = []
+    input_lang = []
+    output_lang = []
+    if num_examples is not None:
+        convs = convs[:num_examples]
     for conv in convs:
         for i in range(len(conv)-1):
-            pairs.append([clean_text(id2line[conv[i]]), clean_text(id2line[conv[i+1]])])
+            if (sent_len[conv[i]] <= max_sentence_length   and 
+                sent_len[conv[i+1]] <= max_sentence_length and 
+                sent_len[conv[i]] >= min_sentence_length   and 
+                sent_len[conv[i+1]] >= min_sentence_length ):
+                # we do not use very long sentences
+                input_lang.append(id2line[conv[i]])
+                output_lang.append(id2line[conv[i+1]])
 
-    input_lang = Lang('questions')
-    output_lang = Lang('answers')
-    print("Read %s sentence pairs" % len(pairs))
-    pairs = filterPairs(pairs)
-    print("Trimmed to %s sentence pairs" % len(pairs))
-    print("Counting words...")
-    for pair in pairs:
-        #print(pair)
-        input_lang.addSentence(pair[0])
-        output_lang.addSentence(pair[1])
+    assert len(input_lang) == len(output_lang)
+    print("Read %s sentence pairs" % len(input_lang))
+        
+    return (input_lang, output_lang)
+
+
+def tokenize(lang, oov=True):
+    """
+    Tokenize sentences into words, and correspondingly create an index based representation for vocabulary
+    """
+    if oov:
+        lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='', oov_token = '<unk>')
+    else:
+        lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
+    lang_tokenizer.fit_on_texts(lang)
+    tensor = lang_tokenizer.texts_to_sequences(lang)
+    tensor = tf.keras.preprocessing.sequence.pad_sequences(tensor, padding='post')
+    return tensor, lang_tokenizer
+
+
+def load_dataset(dataset_folder_path, len_bound, num_examples = None):
+    # creating cleaned input, output pairs
+    targ_lang, inp_lang = preprocess(dataset_folder_path, len_bound, num_examples)
+
+    input_tensor, inp_lang_tokenizer = tokenize(inp_lang, oov = True)   # in the input language, we allow OOV words
+    target_tensor, targ_lang_tokenizer = tokenize(targ_lang, oov = False)   # in the output language, we do not allow OOV words
+
+    return input_tensor, target_tensor, inp_lang_tokenizer, targ_lang_tokenizer
+
+
+if __name__ == "__main__":
+    dataset_folder_path = './cornell movie-dialogs corpus'   # the path to the folder 
+    len_bounds = [2, 15]   # minimum and maximum permissible length of a sentence to be considered.
     
-    print("Counted words:")
-    print(input_lang.name, input_lang.n_words)
-    print(output_lang.name, output_lang.n_words)
-    return input_lang, output_lang, pairs
-
-
-
-def indexesFromSentence(lang, sentence, evaluate):
-    if not evaluate:
-        return [lang.word2index[word] for word in sentence.split(' ')]
-    else:
-        result_vector = []
-        for word in sentence.split(' '):
-            try:
-                result_vector.append(lang.word2index[word])
-            except:
-                result_vector.append(SOS_token)
-        return result_vector
-
-def variableFromSentence(lang, sentence, evaluate = False):
-    indexes = indexesFromSentence(lang, sentence, evaluate)
-    indexes.append(EOS_token)
-    result = Variable(torch.LongTensor(indexes).view(-1, 1))
-    if use_cuda:
-        return result.cuda()
-    else:
-        return result
-
-
-if __name__=='__main__':
-    input_lang, output_lang, pairs = preprocess()
-    lang_dict = {'input': input_lang, 'output': output_lang, 'pairs': pairs}
-    with open('lang_dict','wb') as g:
-        pickle.dump(lang_dict, g)
-        g.close()
-    print('Data preprocessed')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    input_tensor, target_tensor, inp_lang, targ_lang = load_dataset(dataset_folder_path, len_bounds, num_examples = None)
+    
+    inp_lang_json = inp_lang.to_json()
+    targ_lang_json = targ_lang.to_json()
+    
+    with open('processed_data/inp_lang.json', 'w', encoding='utf-8') as f:
+        f.write(json.dumps(inp_lang_json, ensure_ascii=False))
+        f.close()
+    print('Input Language Tokenizer saved...')
+        
+    with open('processed_data/targ_lang.json', 'w', encoding='utf-8') as f:
+        f.write(json.dumps(targ_lang_json, ensure_ascii=False))
+        f.close()
+    print('Target Language Tokenizer saved...')
+        
+    np.savez('processed_data/data.npz', input_tensor, target_tensor)
+    print('Final Dataset saved...')
+    
+    

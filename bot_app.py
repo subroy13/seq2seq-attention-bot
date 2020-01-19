@@ -1,51 +1,107 @@
-import _pickle as pickle
-from Chatbot_class import evaluate
-from preprocess import Lang
-import time
-import warnings
+# Making the necessary imports
+import tensorflow as tf
+import Chatbot_class
+from preprocess import clean_text
+import numpy as np
+import json
+from keras.preprocessing.text import tokenizer_from_json
 
-warnings.filterwarnings('ignore')
-
-print('Current time: ', time.ctime())
-
-print('Loading encoder...')
-print('Please wait...')
-with open('encoder','rb') as f:
-    encoder = pickle.load(f)
+# load the tokenziers
+with open('./processed_data/inp_lang.json', 'r') as f:
+    json_data = json.load(f)
+    inp_lang = tokenizer_from_json(json_data)
     f.close()
-print('Encoder loaded')
-
-print('Current time: ', time.ctime())
-
-print('Loading decoder...')
-print('Please wait...')
-with open('decoder','rb') as f:
-    decoder = pickle.load(f)
+    
+with open('./processed_data/targ_lang.json', 'r') as f:
+    json_data = json.load(f)
+    targ_lang = tokenizer_from_json(json_data)
     f.close()
-print('Decoder loaded')
 
-print('Current time: ', time.ctime())
+# define hyperparameters
+embedding_dim = 128
+units = 256
+vocab_inp_size = len(inp_lang.word_index)+1
+vocab_tar_size = len(targ_lang.word_index)+1
+max_sentence_length = 15
 
-print('Loading data...')
-with open('lang_dict','rb') as f:
-    lang_dict = pickle.load(f)
-    input_lang = lang_dict['input']
-    output_lang = lang_dict['output']
-    f.close()
-print('Data loaded')
 
-print('Current time: ', time.ctime())
+# create encoder from Chatbot class
+encoder = Chatbot_class.create_encoder(vocab_inp_size, embedding_dim, units, max_sentence_length)
+print('Encoder model initialized...')
+encoder.load_weights('trained_model/encoder_weights.h5')  # load the weights, we shall use them to make inference
+print('Encoder model trained weights loaded...')
 
-print('Chatbot deployed')
-print()
+# create decoder from Chatbot class
+decoder = Chatbot_class.create_decoder(vocab_tar_size, embedding_dim, units, units, max_sentence_length)
+print('Decoder model initialized...')
+decoder.load_weights('trained_model/decoder_weights.h5')
+print('Decoder model trained weights loaded...')
 
-input_query = str(input(':: '))
-while (input_query.lower() != 'quit' and input_query.lower() != 'exit'):
-    answer = evaluate(encoder, decoder, input_query, input_lang, output_lang)
-    reply = ':>'
-    for word in answer:
-        if word!='<EOS>':
-            reply = (reply + ' ' + word)
-    print(reply)        
-    input_query = str(input(':: '))
 
+def evaluate(sentence, samp_type = 1):
+    sentence = clean_text(sentence)
+    inputs = []
+    # split the sentence and replace unknown words by <unk> token.
+    for i in sentence.split(' '):
+        try:
+            inputs.append(inp_lang.word_index[i])
+        except KeyError:
+            inputs.append(inp_lang.word_index['<unk>'])
+    
+    inputs = tf.keras.preprocessing.sequence.pad_sequences([inputs], maxlen = max_sentence_length, padding='post')
+    inputs = tf.convert_to_tensor(inputs)
+
+    result = ''
+    enc_output, enc_hidden = encoder(inputs)
+    
+    dec_hidden = enc_hidden
+    dec_input = tf.expand_dims([targ_lang.word_index['<start>']], 0)
+    
+    for t in range(max_sentence_length):
+        predictions, dec_hidden = decoder([enc_output, dec_hidden, dec_input])
+        if samp_type == 1:
+            # that means simple greedy sampling
+            predicted_id = tf.argmax(predictions[0]).numpy()
+        elif samp_type == 2:
+            predicted_id = np.random.choice(vocab_tar_size, p = predictions[0].numpy())
+        elif samp_type == 3:
+            _ , indices = tf.math.top_k(predictions[0], k = 3)
+            predicted_id = np.random.choice(indices)
+
+        if predicted_id!= 0:
+            if targ_lang.index_word[predicted_id] == '<end>':
+                return result, sentence
+            else:
+                result += targ_lang.index_word[predicted_id] + ' '
+        
+        # the predicted ID is fed back into the model
+        dec_input = tf.expand_dims([predicted_id], 0)
+
+    return result, sentence
+
+
+print('=' * 50)
+print('+' * 15 + ' CHATBOT v2.0 ' + '+' * 15)
+print('=' * 50)
+
+print('\nThere are different sampling techniques which might result in different text generation.')
+print('Input 1 for => Greedy Sampling')
+print('Input 2 for => Probability Proportional Sampling')
+print('Input 3 for => Top-3 Sampling')
+samp_type = int(input('Input your preferred sampling choice: '))
+
+if samp_type != 1 and samp_type != 2 and samp_type != 3:
+    raise NotImplementedError
+
+while True:
+    inputs = input('User :> ')
+    if inputs == 'quit' or inputs == 'Quit':
+        break
+    result, sentence = evaluate(inputs, samp_type)
+    print('Bot :> ' + result)
+
+
+
+
+
+    
