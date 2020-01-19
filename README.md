@@ -1,6 +1,6 @@
 # Seq2seq Attention Bot
 
-  It is a chatbot with seq2seq neural network with basic attention mechanism, completely implemented in Python using Pytorch module. Here we use [Cornell Movie Corpus Dataset!](http://www.cs.cornell.edu/~cristian/Cornell_Movie-Dialogs_Corpus.html)
+  It is a chatbot with seq2seq neural network with basic attention mechanism, completely implemented in Python using `Tensorflow 2.0` and `keras` package. Here we use [Cornell Movie Corpus Dataset!](http://www.cs.cornell.edu/~cristian/Cornell_Movie-Dialogs_Corpus.html)
   
   The follwoing steps are needed to be performed to run the chatbot.
 1. Choose any version to work with.
